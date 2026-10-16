@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VPN Gateway
+Comment=Connect or disconnect the SAML VPN gateway
+Icon=network-vpn
+Terminal=false
+Exec=xterm -T "VPN Gateway" -geometry 100x30 -e /usr/local/bin/vpn-gateway toggle
+Categories=Network;
+StartupNotify=true

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+readonly CONFIG="${VPN_GATEWAY_CONFIG:-/etc/vpn-gateway.conf}"
+[[ -r $CONFIG ]] || { echo "Configuration is not readable: $CONFIG" >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$CONFIG"
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly SCRIPT_DIR
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/../libexec/vpn-gateway-lib"
+
+home=$(getent passwd "$APPLIANCE_USER" | cut -d: -f6)
+openconnect_saml="$home/.local/bin/openconnect-saml"
+log_dir="$home/.local/state"
+log_file="$log_dir/vpn-gateway.log"
+server_host=$(vpn_server_host "$VPN_SERVER") || { echo "Invalid VPN_SERVER" >&2; exit 2; }
+targets=()
+read_ipv4_targets "$VPN_TARGETS" targets || { echo "Invalid VPN_TARGETS" >&2; exit 2; }
+
+network_ready() {
+    local dns=${DNS_SERVERS%% *}
+    ip -4 route get "$dns" >/dev/null 2>&1 && getent ahostsv4 "$server_host" >/dev/null 2>&1
+}
+
+wait_for_network() {
+    local attempt
+    for (( attempt=1; attempt<=15; attempt++ )); do
+        network_ready && return 0
+        sleep 2
+    done
+    echo "Repairing NetworkManager connection..."
+    sudo nmcli connection up "$UPLINK_CONNECTION" ifname "$UPLINK_INTERFACE" >/dev/null 2>&1 || true
+    for (( attempt=1; attempt<=15; attempt++ )); do
+        network_ready && return 0
+        sleep 2
+    done
+    return 1
+}
+
+connected() {
+    ip -4 address show dev "$TUN_INTERFACE" 2>/dev/null | grep -q 'inet '
+}
+
+connect_vpn() {
+    exec 9>/tmp/vpn-gateway.lock
+    flock -n 9 || { echo "VPN connection is already starting."; return 0; }
+    connected && { echo "VPN is already connected."; return 0; }
+    [[ -x $openconnect_saml ]] || { echo "Not installed: $openconnect_saml" >&2; return 3; }
+    echo "Waiting for network and DNS..."
+    wait_for_network || { echo "Network or DNS is unavailable after 60 seconds." >&2; return 10; }
+    mkdir -p "$log_dir"
+    local args=(--server "$VPN_SERVER" --authgroup "$VPN_AUTHGROUP" --browser qt)
+    args+=(--browser-display-mode shown --detach --wait 20 --user "$VPN_USERNAME" --no-totp)
+    args+=(--useragent "${VPN_USERAGENT:-AnyConnect}" --ac-version "${VPN_AC_VERSION:-4.10.08029}")
+    append_route_arguments targets args
+    export QT_QPA_PLATFORM=xcb
+    { printf '\n===== %s =====\n' "$(date --iso-8601=seconds)"; "$openconnect_saml" "${args[@]}"; } \
+        2>&1 | tee -a "$log_file"
+    local rc=${PIPESTATUS[0]}
+    (( rc == 0 )) || echo "Connection failed with code $rc. Log: $log_file" >&2
+    return "$rc"
+}
+
+disconnect_vpn() {
+    "$openconnect_saml" disconnect || true
+}
+
+status_vpn() {
+    echo "VM addresses:"
+    ip -4 -brief address show scope global
+    echo "VPN interface:"
+    ip -4 -brief address show dev "$TUN_INTERFACE" 2>/dev/null || echo "not connected"
+    echo "Target routes:"
+    local target
+    for target in "${targets[@]}"; do
+        ip -4 route get "${target%/*}" || true
+    done
+}
+
+plan_vpn() {
+    echo "Server host: $server_host"
+    echo "Tunnel interface: $TUN_INTERFACE"
+    echo "Routes:"
+    printf '  %s\n' "${targets[@]}"
+}
+
+diagnose() {
+    echo "=== date ==="; date --iso-8601=seconds
+    echo "=== system ==="; cat /etc/os-release
+    echo "=== links ==="; ip -brief address
+    echo "=== routes ==="; ip -4 route
+    echo "=== NetworkManager ==="; nmcli device status; nmcli connection show --active
+    echo "=== DNS ==="; cat /etc/resolv.conf; getent ahostsv4 "$server_host" || true
+    echo "=== forwarding ==="; sysctl net.ipv4.ip_forward
+    echo "=== nftables ==="; sudo nft list table inet vpn_gateway 2>&1 || true
+    echo "=== processes ==="; pgrep -a openconnect || true
+    echo "=== status ==="; status_vpn
+}
+
+case ${1:-toggle} in
+    connect) connect_vpn ;;
+    disconnect) disconnect_vpn ;;
+    toggle)
+        if connected; then
+            disconnect_vpn
+        else
+            connect_vpn
+        fi
+        ;;
+    status) status_vpn ;;
+    plan) plan_vpn ;;
+    diagnose) diagnose ;;
+    *) echo "Usage: vpn-gateway {connect|disconnect|toggle|status|plan|diagnose}" >&2; exit 2 ;;
+esac

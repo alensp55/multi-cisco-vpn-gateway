@@ -1,0 +1,13 @@
+[Unit]
+Description=Selective forwarding through a SAML VPN tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vpn-gateway-router apply
+ExecStop=/usr/local/libexec/vpn-gateway-router remove
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

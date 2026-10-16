@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly CONFIG="${VPN_GATEWAY_CONFIG:-/etc/vpn-gateway.conf}"
+[[ -r $CONFIG ]] || { echo "Configuration is not readable: $CONFIG" >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$CONFIG"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+readonly SCRIPT_DIR
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/vpn-gateway-lib"
+
+targets=()
+read_ipv4_targets "$VPN_TARGETS" targets || { echo "Invalid VPN_TARGETS" >&2; exit 2; }
+
+apply_rules() {
+    nft delete table inet vpn_gateway 2>/dev/null || true
+    render_nft_rules vpn_gateway "$UPLINK_INTERFACE" "$TUN_INTERFACE" "${targets[@]}" | nft -f -
+}
+
+case ${1:-apply} in
+    apply) apply_rules ;;
+    check) render_nft_rules vpn_gateway_check "$UPLINK_INTERFACE" "$TUN_INTERFACE" "${targets[@]}" | nft --check -f - ;;
+    plan) render_nft_rules vpn_gateway "$UPLINK_INTERFACE" "$TUN_INTERFACE" "${targets[@]}" ;;
+    remove) nft delete table inet vpn_gateway 2>/dev/null || true ;;
+    *) echo "Usage: vpn-gateway-router {apply|check|plan|remove}" >&2; exit 2 ;;
+esac

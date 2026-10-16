@@ -1,0 +1,29 @@
+# Linux account that launches the graphical SAML login.
+APPLIANCE_USER="vpnuser"
+
+# Existing NetworkManager connection and interface used by the VM for Internet access.
+UPLINK_CONNECTION="Wired connection 1"
+UPLINK_INTERFACE="ens33"
+
+# Optional. Binding the connection to a MAC prevents NetworkManager from activating it on another adapter.
+UPLINK_MAC="00:00:00:00:00:00"
+
+# Space-separated resolvers. Use a resolver reachable before the VPN connects.
+DNS_SERVERS="192.0.2.53 1.1.1.1"
+
+# Set to true only if systemd-resolved or the DHCP-provided resolver is unreliable.
+WRITE_STATIC_RESOLV_CONF="false"
+
+# Cisco/AnyConnect-compatible gateway settings.
+VPN_SERVER="https://vpn.example.org"
+VPN_AUTHGROUP="SAML_Group"
+VPN_USERNAME="vpn-user"
+VPN_USERAGENT="AnyConnect"
+VPN_AC_VERSION="4.10.08029"
+
+# Interface created by OpenConnect and internal destinations routed through it.
+TUN_INTERFACE="tun0"
+VPN_TARGETS="192.0.2.40/32"
+
+# Reproducible version tested by this project. Change deliberately after testing.
+OPENCONNECT_SAML_VERSION="0.24.5"

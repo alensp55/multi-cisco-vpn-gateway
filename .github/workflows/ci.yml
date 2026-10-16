@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install validators
+        run: sudo apt-get update && sudo apt-get install -y bats nftables shellcheck
+      - name: Check Bash syntax
+        run: |
+          bash -n install.sh uninstall.sh bin/vpn-gateway libexec/vpn-gateway-lib libexec/vpn-gateway-router
+      - name: Run ShellCheck
+        run: |
+          shellcheck install.sh uninstall.sh bin/vpn-gateway libexec/vpn-gateway-lib libexec/vpn-gateway-router
+      - name: Run Bash tests
+        run: bats tests/vpn-gateway-lib.bats
+      - name: Check nftables rules
+        run: |
+          sudo env VPN_GATEWAY_CONFIG="$GITHUB_WORKSPACE/vpn-gateway.conf.example" \
+            ./libexec/vpn-gateway-router check
+      - name: Enforce line length
+        shell: python
+        run: |
+          from pathlib import Path
+
+          ignored = {".git"}
+          failures = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in ignored for part in path.parts):
+                  continue
+              for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                  if len(line) > 120:
+                      failures.append(f"{path}:{number}:{len(line)}")
+          if failures:
+              raise SystemExit("Lines longer than 120 characters:\n" + "\n".join(failures))
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem windows -Include *.ps1,*.psm1 -Recurse | ForEach-Object {
+              $tokens = $null
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $_.FullName,
+                  [ref]$tokens,
+                  [ref]$errors
+              )
+              if ($errors.Count -gt 0) {
+                  $failed = $true
+                  $errors | Write-Error
+              }
+          }
+          if ($failed) { exit 1 }
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -Scope CurrentUser -Force -MinimumVersion 5.5.0
+      - name: Run PowerShell tests
+        shell: pwsh
+        run: Invoke-Pester -Path tests/VpnGatewayRoute.Tests.ps1 -CI
